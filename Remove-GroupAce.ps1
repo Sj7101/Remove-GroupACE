@@ -5,10 +5,27 @@ param(
     [bool]$IncludeChildObjects
 )
 
+# Define the log file (placed in the same folder as the script)
+$LogFile = "$PSScriptRoot\Remove-AceLog.txt"
+
+# Logging function: writes log entries in the format [YYYY-MM-DD][HH:mm:ss][ERR/INF/SYS][Message]
+function Write-Log {
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet("ERR", "INF", "SYS")]
+        [string]$Level,
+        [Parameter(Mandatory=$true)]
+        [string]$Message
+    )
+    $date = Get-Date -Format "yyyy-MM-dd"
+    $time = (Get-Date -Format "HH:mm:ss")
+    $line = "[$date][$time][$Level][$Message]"
+    Add-Content -Path $LogFile -Value $line
+}
+
 # Load configuration from config.json
 $script:config = Get-Content -Path "$PSScriptRoot\config.json" | ConvertFrom-Json
 
-# If the -IncludeChildObjects parameter was not passed, use the value from config.json.
 if (-not $PSBoundParameters.ContainsKey("IncludeChildObjects")) {
     $IncludeChildObjects = $script:config.IncludeChildObjects
 }
@@ -22,7 +39,7 @@ function Process-Item {
         [string[]]$TargetGroups
     )
 
-    Write-Host "Processing item: $Path"
+    Write-Log "INF" "Processing item: $Path"
 
     foreach ($group in $TargetGroups) {
         # If the group doesn't include a backslash, attempt to resolve its full identity.
@@ -31,23 +48,23 @@ function Process-Item {
                 $aclInitial = Get-Acl -Path $Path
             }
             catch {
-                Write-Warning "Could not get ACL for $Path. Error: $_"
+                Write-Log "ERR" "Could not get ACL for $Path. Error: $_"
                 continue
             }
             $foundAce = $aclInitial.Access | Where-Object { $_.IdentityReference.Value -match "^(.*\\)?$([regex]::Escape($group))$" } | Select-Object -First 1
             if ($foundAce) {
                 $resolvedGroup = $foundAce.IdentityReference.Value
-                Write-Host "Resolved group for '$group' as '$resolvedGroup' on $Path"
+                Write-Log "INF" "Resolved group for '$group' as '$resolvedGroup' on $Path"
             }
             else {
-                # Fallback: use the current user's domain if available, else the local computer name.
+                # Fallback: use the current user's domain if available and different from $env:COMPUTERNAME, otherwise $env:COMPUTERNAME.
                 if ($env:USERDOMAIN -and $env:USERDOMAIN -ne $env:COMPUTERNAME) {
                     $resolvedGroup = "$env:USERDOMAIN\$group"
                 }
                 else {
                     $resolvedGroup = "$env:COMPUTERNAME\$group"
                 }
-                Write-Host "No ACE found for '$group'; defaulting resolved group to '$resolvedGroup' on $Path"
+                Write-Log "INF" "No matching ACE found; defaulting resolved group to '$resolvedGroup' on $Path"
             }
             $pattern = "^(.*\\)?{0}$" -f [regex]::Escape($resolvedGroup)
         }
@@ -61,22 +78,22 @@ function Process-Item {
                 $acl = Get-Acl -Path $Path
             }
             catch {
-                Write-Warning "Could not get ACL for $Path. Error: $_"
+                Write-Log "ERR" "Could not get ACL for $Path. Error: $_"
                 break
             }
             $ace = $acl.Access | Where-Object { $_.IdentityReference.Value -match $pattern } | Select-Object -First 1
             if (-not $ace) {
-                Write-Host "No more ACE for '$group' on $Path"
+                Write-Log "INF" "No more ACE for '$group' on $Path"
                 break
             }
-            Write-Host "Removing ACE for '$group' (pattern: '$pattern') on $Path"
+            Write-Log "INF" "Removing ACE for '$group' (pattern: '$pattern') on $Path"
             $acl.RemoveAccessRuleSpecific($ace) | Out-Null
             try {
                 Set-Acl -Path $Path -AclObject $acl
-                Write-Host "Updated ACL for $Path after removal of '$group'"
+                Write-Log "INF" "Updated ACL for $Path after removal of '$group'"
             }
             catch {
-                Write-Warning "Failed to update ACL for $Path. Error: $_"
+                Write-Log "ERR" "Failed to update ACL for $Path. Error: $_"
                 break
             }
         }
@@ -94,11 +111,11 @@ function Remove-GroupACE {
 
     $targetGroups = $script:config.TargetGroups
     if (-not $targetGroups -or $targetGroups.Count -eq 0) {
-        Write-Error "TargetGroups not defined in config.json."
+        Write-Log "ERR" "TargetGroups not defined in config.json."
         return
     }
 
-    Write-Host "Processing path: $Path with IncludeChildObjects: $IncludeChildObjects"
+    Write-Log "INF" "Processing path: $Path with IncludeChildObjects: $IncludeChildObjects"
     
     # Process the top-level item.
     Process-Item -Path $Path -TargetGroups $targetGroups
@@ -116,3 +133,5 @@ function Remove-GroupACE {
 foreach ($path in $script:config.Paths) {
     Remove-GroupACE -Path $path -IncludeChildObjects $IncludeChildObjects
 }
+
+Write-Log "SYS" "Removal job completed."
