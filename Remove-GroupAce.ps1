@@ -13,7 +13,7 @@ if (-not $PSBoundParameters.ContainsKey("IncludeChildObjects")) {
     $IncludeChildObjects = $script:config.IncludeChildObjects
 }
 
-# Function to process a single item (file or folder) by removing ACEs for the target groups.
+# Function to process a single item (file or folder) by removing ACEs for each target group one at a time.
 function Process-Item {
     param(
         [Parameter(Mandatory = $true)]
@@ -23,36 +23,32 @@ function Process-Item {
     )
 
     Write-Host "Processing item: $Path"
-    try {
-        $acl = Get-Acl -Path $Path
-    }
-    catch {
-        Write-Warning "Could not get ACL for $Path. Error: $_"
-        return
-    }
-    
-    $modified = $false
     foreach ($group in $TargetGroups) {
-        $acesToRemove = $acl.Access | Where-Object { $_.IdentityReference.Value -eq $group }
-        if ($acesToRemove) {
-            foreach ($ace in $acesToRemove) {
-                Write-Host "Removing ACE for '$group' on $Path"
-                $acl.RemoveAccessRuleSpecific($ace) | Out-Null
-                $modified = $true
+        # Remove ACEs for this group one at a time.
+        while ($true) {
+            try {
+                $acl = Get-Acl -Path $Path
             }
-        }
-        else {
-            Write-Host "No ACE for '$group' found on $Path"
-        }
-    }
-
-    if ($modified) {
-        try {
-            Set-Acl -Path $Path -AclObject $acl
-            Write-Host "Updated ACL for $Path"
-        }
-        catch {
-            Write-Warning "Failed to update ACL for $Path. Error: $_"
+            catch {
+                Write-Warning "Could not get ACL for $Path. Error: $_"
+                break
+            }
+            # Get the first matching ACE for the current group.
+            $ace = $acl.Access | Where-Object { $_.IdentityReference.Value -eq $group } | Select-Object -First 1
+            if (-not $ace) {
+                Write-Host "No more ACE for '$group' on $Path"
+                break
+            }
+            Write-Host "Removing ACE for '$group' on $Path"
+            $acl.RemoveAccessRuleSpecific($ace) | Out-Null
+            try {
+                Set-Acl -Path $Path -AclObject $acl
+                Write-Host "Updated ACL for $Path after removal of '$group'"
+            }
+            catch {
+                Write-Warning "Failed to update ACL for $Path. Error: $_"
+                break
+            }
         }
     }
 }
@@ -77,7 +73,7 @@ function Remove-GroupACE {
     # Process the top-level item.
     Process-Item -Path $Path -TargetGroups $targetGroups
 
-    # If IncludeChildObjects is true and the path is a directory, process all child items recursively.
+    # If IncludeChildObjects is true and the path is a container, process all child items recursively.
     if ($IncludeChildObjects -and (Test-Path $Path -PathType Container)) {
         $childItems = Get-ChildItem -Path $Path -Recurse -Force -ErrorAction SilentlyContinue
         foreach ($item in $childItems) {
