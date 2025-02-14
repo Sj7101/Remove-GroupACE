@@ -23,11 +23,14 @@ function Write-Log {
     Add-Content -Path $LogFile -Value $line
 }
 
-# Load configuration from config.json
+Write-Log "SYS" "Loading configuration from config.json"
 $script:config = Get-Content -Path "$PSScriptRoot\config.json" | ConvertFrom-Json
 
 if (-not $PSBoundParameters.ContainsKey("IncludeChildObjects")) {
+    Write-Log "SYS" "Including all Child Objects"
     $IncludeChildObjects = $script:config.IncludeChildObjects
+}else{
+    Write-Log "SYS" "Skipping all Child Objects"
 }
 
 # Function to process a single item (file or folder) by removing ACEs for each target group one at a time.
@@ -86,7 +89,11 @@ function Process-Item {
                 Write-Log "INF" "No more ACE for '$group' on $Path"
                 break
             }
-            Write-Log "INF" "Removing ACE for '$group' (pattern: '$pattern') on $Path"
+            if ($ace.IsInherited) {
+                Write-Log "INF" "No more inherited ACE for '$group' on $Path"
+                break
+            }
+            Write-Log "INF" "Removing explicit ACE for '$group' (pattern: '$pattern') on $Path"
             $acl.RemoveAccessRuleSpecific($ace) | Out-Null
             try {
                 Set-Acl -Path $Path -AclObject $acl
@@ -130,8 +137,11 @@ function Remove-GroupACE {
 }
 
 # Main execution: Loop through each path specified in the config file.
+Write-Log "SYS" "=========================================================================================="
+
 foreach ($path in $script:config.Paths) {
     Remove-GroupACE -Path $path -IncludeChildObjects $IncludeChildObjects
 }
 
 Write-Log "SYS" "Removal job completed."
+Write-Log "SYS" "=========================================================================================="
