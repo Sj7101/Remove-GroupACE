@@ -180,3 +180,21 @@ Write-Log "SYS" "Permissions removed for $global:FileRemovalCount files."
 Write-Log "SYS" "Inherited permissions encountered on $global:FileInheritedCount files."
 Write-Log "SYS" "Removal job completed."
 Write-Log "SYS" "=========================================================================================="
+
+
+<# 
+    
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$FolderPath
+)
+
+# Recursively retrieve all directories and files
+$folders = Get-ChildItem -Path $FolderPath -Recurse -Directory
+$files = Get-ChildItem -Path $FolderPath -Recurse -File
+
+Write-Output "Total folders: $($folders.Count)"
+Write-Output "Total files: $($files.Count)"
+
+    
+#>
