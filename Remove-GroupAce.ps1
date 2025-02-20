@@ -29,9 +29,16 @@ $script:config = Get-Content -Path "$PSScriptRoot\config.json" | ConvertFrom-Jso
 if (-not $PSBoundParameters.ContainsKey("IncludeChildObjects")) {
     Write-Log "SYS" "Including all Child Objects"
     $IncludeChildObjects = $script:config.IncludeChildObjects
-}else{
+} else {
     Write-Log "SYS" "Skipping all Child Objects"
 }
+
+# Global counters
+$global:TotalItems       = 0
+$global:FileCount        = 0
+$global:FolderCount      = 0
+$global:FileRemovalCount = 0
+$global:FileInheritedCount = 0
 
 # Function to process a single item (file or folder) by removing ACEs for each target group one at a time.
 function Process-Item {
@@ -41,6 +48,19 @@ function Process-Item {
         [Parameter(Mandatory = $true)]
         [string[]]$TargetGroups
     )
+
+    # Update global counters based on item type.
+    $global:TotalItems++
+    if (Test-Path $Path -PathType Container) {
+        $global:FolderCount++
+    } else {
+        $global:FileCount++
+    }
+    
+    # Local flag to indicate if this file encountered any inherited ACE.
+    $inheritedFound = $false
+    # Local flag to track if any explicit removal occurred on this item.
+    $removalOccurred = $false
 
     Write-Log "INF" "Processing item: $Path"
 
@@ -90,7 +110,8 @@ function Process-Item {
                 break
             }
             if ($ace.IsInherited) {
-                Write-Log "INF" "No more inherited ACE for '$group' on $Path"
+                Write-Log "INF" "Encountered inherited ACE for '$group' on $Path; skipping explicit removal."
+                $inheritedFound = $true
                 break
             }
             Write-Log "INF" "Removing explicit ACE for '$group' (pattern: '$pattern') on $Path"
@@ -98,11 +119,21 @@ function Process-Item {
             try {
                 Set-Acl -Path $Path -AclObject $acl
                 Write-Log "INF" "Updated ACL for $Path after removal of '$group'"
+                $removalOccurred = $true
             }
             catch {
                 Write-Log "ERR" "Failed to update ACL for $Path. Error: $_"
                 break
             }
+        }
+    }
+    # For files, update the removal and inherited counters (each file counted only once).
+    if (-not (Test-Path $Path -PathType Container)) {
+        if ($removalOccurred) {
+            $global:FileRemovalCount++
+        }
+        if ($inheritedFound) {
+            $global:FileInheritedCount++
         }
     }
 }
@@ -143,5 +174,9 @@ foreach ($path in $script:config.Paths) {
     Remove-GroupACE -Path $path -IncludeChildObjects $IncludeChildObjects
 }
 
+# Log the summary
+Write-Log "SYS" "Summary: Total items processed: $global:TotalItems (Files: $global:FileCount, Folders: $global:FolderCount)"
+Write-Log "SYS" "Permissions removed for $global:FileRemovalCount files."
+Write-Log "SYS" "Inherited permissions encountered on $global:FileInheritedCount files."
 Write-Log "SYS" "Removal job completed."
 Write-Log "SYS" "=========================================================================================="
